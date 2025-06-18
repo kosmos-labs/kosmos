@@ -2,27 +2,35 @@
 """
 PyTorch I/O Intensive Training Script
 Synthetic training loop with large dataset for baseline performance measurement
+Performance monitoring now handled by eBPF agent
 """
 
 import os
 import time
 import json
-import psutil
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
-from pathlib import Path
-import threading
-import subprocess
-import GPUtil
-from collections import defaultdict
 
 class SyntheticImageDataset(Dataset):
     """Synthetic dataset that simulates ImageNet-like data loading"""
     
     def __init__(self, num_samples=100000, image_size=224, num_classes=1000):
+        """
+        Initialize the SyntheticImageDataset with synthetic image data.
+
+        Args:
+            num_samples (int): Number of synthetic samples to generate. Default is 100,000.
+            image_size (int): Size of the synthetic images (height and width). Default is 224.
+            num_classes (int): Number of distinct classes for labels. Default is 1,000.
+
+        Attributes:
+            images (torch.Tensor): Tensor containing the synthetic image data with shape (num_samples, 3, image_size, image_size).
+            labels (torch.Tensor): Tensor containing the labels for each image with shape (num_samples,).
+        """
+
         self.num_samples = num_samples
         self.image_size = image_size
         self.num_classes = num_classes
@@ -33,16 +41,42 @@ class SyntheticImageDataset(Dataset):
         self.labels = torch.randint(0, num_classes, (num_samples,))
         
     def __len__(self):
+        """
+        Returns the number of samples in the dataset.
+
+        Returns:
+            int: The number of samples in the dataset.
+        """
         return self.num_samples
     
     def __getitem__(self, idx):
         # Simulate disk I/O by accessing data
+        """
+        Returns a tuple containing the synthetic image and label at the given index.
+
+        Args:
+            idx (int): Index of the sample to retrieve.
+
+        Returns:
+            tuple: A tuple containing the image and label for the given index.
+        """
         return self.images[idx], self.labels[idx]
 
 class SimpleCNN(nn.Module):
     """Simple CNN for training"""
     
     def __init__(self, num_classes=1000):
+        """
+        Initialize the SimpleCNN model.
+
+        Args:
+            num_classes (int): The number of output classes for the classifier. Default is 1000.
+
+        The model consists of:
+        - A feature extraction part with three convolutional layers, each followed by a ReLU activation and max pooling.
+        - A classifier that maps the extracted features to the specified number of classes.
+        """
+
         super(SimpleCNN, self).__init__()
         self.features = nn.Sequential(
             nn.Conv2d(3, 64, 3, padding=1),
@@ -58,104 +92,44 @@ class SimpleCNN(nn.Module):
         self.classifier = nn.Linear(256, num_classes)
     
     def forward(self, x):
+        """
+        Forward pass of the SimpleCNN model.
+
+        Args:
+            x (torch.Tensor): The input tensor, of shape (B, C, H, W), where B is the batch size, C is the number of channels, H is the height, and W is the width.
+
+        Returns:
+            torch.Tensor: The output tensor, of shape (B, num_classes).
+
+        Notes:
+            - The input tensor is passed through the feature extraction part of the model, which consists of three convolutional layers, each followed by a ReLU activation and max pooling.
+            - The output of the feature extraction part is then flattened and passed through the classifier, which consists of a single fully connected layer.
+            - The output of the classifier is the final output of the model.
+        """
         x = self.features(x)
         x = x.view(x.size(0), -1)
         x = self.classifier(x)
         return x
 
-class PerformanceMonitor:
-    """Monitor system performance metrics"""
-    
-    def __init__(self):
-        self.metrics = defaultdict(list)
-        self.running = False
-        self.monitor_thread = None
-    
-    def start_monitoring(self):
-        """Start monitoring in background thread"""
-        self.running = True
-        self.monitor_thread = threading.Thread(target=self._monitor_loop)
-        self.monitor_thread.daemon = True
-        self.monitor_thread.start()
-    
-    def stop_monitoring(self):
-        """Stop monitoring"""
-        self.running = False
-        if self.monitor_thread:
-            self.monitor_thread.join()
-    
-    def _monitor_loop(self):
-        """Main monitoring loop"""
-        while self.running:
-            try:
-                # CPU and I/O metrics
-                cpu_percent = psutil.cpu_percent(interval=1)
-                io_counters = psutil.disk_io_counters()
-                
-                # GPU metrics
-                gpu_util = 0
-                try:
-                    gpus = GPUtil.getGPUs()
-                    if gpus:
-                        gpu_util = gpus[0].load * 100
-                except:
-                    pass
-                
-                # Memory metrics
-                memory = psutil.virtual_memory()
-                
-                # Store metrics
-                timestamp = time.time()
-                self.metrics['timestamp'].append(timestamp)
-                self.metrics['cpu_percent'].append(cpu_percent)
-                self.metrics['gpu_util'].append(gpu_util)
-                self.metrics['memory_percent'].append(memory.percent)
-                self.metrics['disk_read_bytes'].append(io_counters.read_bytes if io_counters else 0)
-                self.metrics['disk_write_bytes'].append(io_counters.write_bytes if io_counters else 0)
-                
-                time.sleep(1)
-            except Exception as e:
-                print(f"Monitoring error: {e}")
-                time.sleep(1)
-    
-    def get_average_metrics(self):
-        """Get average metrics over monitoring period"""
-        if not self.metrics['timestamp']:
-            return {}
-        
-        return {
-            'avg_cpu_percent': np.mean(self.metrics['cpu_percent']),
-            'avg_gpu_util': np.mean(self.metrics['gpu_util']),
-            'avg_memory_percent': np.mean(self.metrics['memory_percent']),
-            'total_disk_read_mb': (self.metrics['disk_read_bytes'][-1] - self.metrics['disk_read_bytes'][0]) / (1024*1024),
-            'total_disk_write_mb': (self.metrics['disk_write_bytes'][-1] - self.metrics['disk_write_bytes'][0]) / (1024*1024),
-            'monitoring_duration': self.metrics['timestamp'][-1] - self.metrics['timestamp'][0]
-        }
-
-def measure_disk_throughput():
-    """Measure disk throughput using dd command"""
-    try:
-        # Create a temporary file for testing
-        test_file = "/tmp/disk_test"
-        result = subprocess.run([
-            'dd', 'if=/dev/zero', f'of={test_file}', 'bs=1M', 'count=100', 'conv=fdatasync'
-        ], capture_output=True, text=True, timeout=30)
-        
-        # Parse output to get throughput
-        if result.returncode == 0:
-            # Extract time from dd output
-            lines = result.stderr.split('\n')
-            for line in lines:
-                if 'bytes transferred' in line:
-                    # Parse the throughput info
-                    return "Disk throughput test completed"
-        
-        return "Disk throughput test failed"
-    except Exception as e:
-        return f"Disk throughput test error: {e}"
-
 def main():
     # Configuration
+    """
+    Main entry point for PyTorch I/O Intensive Training (eBPF Monitored).
+
+    This script trains a simple convolutional neural network on a synthetic dataset
+    using PyTorch. The dataset is generated on the fly and consists of 50,000 samples.
+    The model is trained for 5 epochs using the Adam optimizer with a learning rate of
+    0.001. The dataset is loaded using a DataLoader with a batch size of 32 and 4
+    workers.
+
+    The script also prints out basic training metrics, such as the total wall-clock time,
+    average epoch time, average batch time, data loader throughput, and total samples
+    processed. The results are saved to a file named "training_results.json".
+
+    Note that the I/O performance metrics are collected by an eBPF agent, which is
+    launched separately. The agent logs the I/O metrics to the console, so you can
+    check the agent logs to see the detailed I/O performance metrics.
+    """
     config = {
         'batch_size': 32,
         'num_epochs': 5,
@@ -165,16 +139,14 @@ def main():
         'device': 'cuda' if torch.cuda.is_available() else 'cpu'
     }
     
-    print("=== PyTorch I/O Intensive Training Baseline ===")
+    print("=== PyTorch I/O Intensive Training (eBPF Monitored) ===")
     print(f"Device: {config['device']}")
     print(f"Dataset size: {config['num_samples']} samples")
     print(f"Batch size: {config['batch_size']}")
     print(f"Epochs: {config['num_epochs']}")
     print(f"DataLoader workers: {config['num_workers']}")
+    print("Note: I/O performance monitoring handled by eBPF agent")
     print()
-    
-    # Initialize performance monitor
-    monitor = PerformanceMonitor()
     
     # Create dataset and dataloader
     print("Creating synthetic dataset...")
@@ -200,10 +172,6 @@ def main():
         'forward_times': [],
         'backward_times': []
     }
-    
-    # Start monitoring
-    print("Starting performance monitoring...")
-    monitor.start_monitoring()
     
     # Training loop
     print("Starting training...")
@@ -254,21 +222,12 @@ def main():
     
     total_training_time = time.time() - total_start_time
     
-    # Stop monitoring
-    monitor.stop_monitoring()
-    
-    # Get performance metrics
-    perf_metrics = monitor.get_average_metrics()
-    
-    # Measure disk throughput
-    disk_throughput = measure_disk_throughput()
-    
-    # Calculate data loader throughput
+    # Calculate basic metrics
     total_samples = config['num_samples'] * config['num_epochs']
     avg_data_loading_time = np.mean(training_metrics['data_loading_times'])
     data_loader_throughput = config['batch_size'] / avg_data_loading_time if avg_data_loading_time > 0 else 0
     
-    # Compile results
+    # Compile results (basic training metrics only)
     results = {
         'config': config,
         'total_wall_clock_time': total_training_time,
@@ -279,12 +238,11 @@ def main():
         'avg_backward_time': np.mean(training_metrics['backward_times']),
         'data_loader_throughput_samples_per_sec': data_loader_throughput,
         'total_samples_processed': total_samples,
-        'performance_metrics': perf_metrics,
-        'disk_throughput_test': disk_throughput
+        'note': 'I/O performance metrics collected by eBPF agent'
     }
     
     # Save results
-    output_file = "baseline_training_results.json"
+    output_file = "training_results.json"
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
     
@@ -294,11 +252,8 @@ def main():
     print(f"Average epoch time: {np.mean(training_metrics['epoch_times']):.2f}s")
     print(f"Average batch time: {np.mean(training_metrics['batch_times']):.3f}s")
     print(f"Data loader throughput: {data_loader_throughput:.1f} samples/sec")
-    print(f"Average GPU utilization: {perf_metrics.get('avg_gpu_util', 0):.1f}%")
-    print(f"Average CPU utilization: {perf_metrics.get('avg_cpu_percent', 0):.1f}%")
-    print(f"Total disk read: {perf_metrics.get('total_disk_read_mb', 0):.1f} MB")
-    print(f"Total disk write: {perf_metrics.get('total_disk_write_mb', 0):.1f} MB")
     print(f"\nResults saved to: {output_file}")
+    print("Check eBPF agent logs for detailed I/O performance metrics")
 
 if __name__ == "__main__":
     main()
