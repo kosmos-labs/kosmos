@@ -1,0 +1,27 @@
+{
+  "config": {
+    "batch_size": 5,
+    "num_epochs": 2,
+    "learning_rate": 0.001,
+    "num_samples": 200,
+    "num_workers": 4,
+    "device": "cpu"
+  },
+  "total_wall_clock_time": 82.37780499458313,
+  "avg_epoch_time": 41.18882727622986,
+  "avg_batch_time": 1.0244003385305405,
+  "avg_data_loading_time": 1.3011693954467774e-05,
+  "avg_forward_time": 0.43047759830951693,
+  "avg_backward_time": 0.5939077794551849,
+  "data_loader_throughput_samples_per_sec": 384269.72056802566,
+  "total_samples_processed": 400,
+  "performance_metrics": {
+    "avg_cpu_percent": 58.97380952380953,
+    "avg_gpu_util": 0.0,
+    "avg_memory_percent": 24.00238095238095,
+    "total_disk_read_mb": 2.2109375,
+    "total_disk_write_mb": 34.484375,
+    "monitoring_duration": 82.10608196258545
+  },
+  "disk_throughput_test": "Disk throughput test failed"
+}
